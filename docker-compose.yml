@@ -270,6 +270,52 @@ services:
     # from its checkpoint. This is also how it picks up a new schema version.
     restart: unless-stopped
 
+  # Streaming job: bronze change events -> silver current state (spark/jobs/silver_cdc.py).
+  spark-silver:
+    image: payments-lakehouse/spark:4.1.4-iceberg-1.12.0
+    container_name: pl-spark-silver
+    depends_on:
+      iceberg-catalog:
+        condition: service_healthy
+      object-store-init:
+        condition: service_completed_successfully
+      spark-bronze:
+        condition: service_started
+    command: ["/opt/spark/bin/spark-submit", "--conf", "spark.ui.port=4041",
+              "/opt/lakehouse/jobs/silver_cdc.py", "--trigger-seconds", "60"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${LAKEHOUSE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${LAKEHOUSE_S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      ICEBERG_CATALOG_PASSWORD: ${ICEBERG_CATALOG_PASSWORD}
+      PII_HASH_KEY: ${PII_HASH_KEY:?set PII_HASH_KEY in .env}
+    volumes:
+      - ./spark/jobs:/opt/lakehouse/jobs:ro
+      - sparkcheckpoints:/checkpoints
+    ports:
+      - "4041:4041"   # Spark UI for the silver job
+    restart: unless-stopped
+
+  # On-demand Spark for SQL and checks; never started by `docker compose up`.
+  #   ./spark/sql.sh                     (SQL shell)
+  #   docker compose run --rm spark-tools /opt/spark/bin/spark-submit \
+  #     --py-files /opt/lakehouse/jobs/silver_cdc.py /opt/lakehouse/jobs/reconcile_silver.py
+  spark-tools:
+    image: payments-lakehouse/spark:4.1.4-iceberg-1.12.0
+    profiles: ["tools"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${LAKEHOUSE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${LAKEHOUSE_S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      ICEBERG_CATALOG_PASSWORD: ${ICEBERG_CATALOG_PASSWORD}
+      PII_HASH_KEY: ${PII_HASH_KEY}
+      # Read-only Postgres access for reconciliation (the CDC role: SELECT only).
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./spark/jobs:/opt/lakehouse/jobs:ro
+      - sparkcheckpoints:/checkpoints
+
 volumes:
   pgdata:
   kafkadata:

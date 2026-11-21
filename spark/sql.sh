@@ -12,6 +12,6 @@ cd "$(dirname "$0")/.."
 tty_flag=()
 [ -t 0 ] || tty_flag=(-T)
 
-exec docker compose run --rm --no-deps "${tty_flag[@]}" spark-bronze bash -c \
+exec docker compose run --rm --no-deps "${tty_flag[@]}" spark-tools bash -c \
     'exec /opt/spark/bin/spark-sql --conf spark.sql.catalog.lakehouse.jdbc.password="$ICEBERG_CATALOG_PASSWORD" "$@"' \
     spark-sql "$@"
