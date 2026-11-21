@@ -123,6 +123,8 @@ def main():
                         help="process everything currently in Kafka, then stop")
     parser.add_argument("--trigger-seconds", type=int, default=30)
     parser.add_argument("--max-offsets-per-trigger", type=int, default=250_000)
+    parser.add_argument("--tables", nargs="+", choices=TABLES, default=TABLES,
+                        help="process only these tables (e.g. to backfill one table)")
     args = parser.parse_args()
 
     spark = (SparkSession.builder.appName("bronze-cdc")
@@ -132,7 +134,7 @@ def main():
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {NAMESPACE}")
 
     queries = []
-    for table in TABLES:
+    for table in args.tables:
         name = f"{NAMESPACE}.{table}"
         events, n_versions = bronze_stream(spark, table, args.max_offsets_per_trigger)
         ensure_table(spark, name, events.schema)

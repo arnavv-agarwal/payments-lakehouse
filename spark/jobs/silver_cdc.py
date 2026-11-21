@@ -163,8 +163,15 @@ def ensure_table(spark, table, schema):
 
 
 def latest_snapshot(session, table):
-    return session.sql(f"SELECT snapshot_id, summary FROM {SILVER}.{table}.snapshots "
-                       "ORDER BY committed_at DESC LIMIT 1").first()
+    """The table's current snapshot: what the `main` branch points to.
+
+    Not simply the most recently committed snapshot: after a rollback, the
+    current snapshot is an older one.
+    """
+    name = f"{SILVER}.{table}"
+    return session.sql(f"SELECT s.snapshot_id, s.summary FROM {name}.refs r "
+                       f"JOIN {name}.snapshots s ON r.snapshot_id = s.snapshot_id "
+                       "WHERE r.name = 'main'").first()
 
 
 def start_query(spark, table, args, email_hash):
@@ -216,6 +223,8 @@ def main():
                         help="process new bronze rows, then stop")
     parser.add_argument("--trigger-seconds", type=int, default=60)
     parser.add_argument("--max-rows-per-batch", type=int, default=1_000_000)
+    parser.add_argument("--tables", nargs="+", choices=list(TABLES), default=list(TABLES),
+                        help="process only these tables (e.g. to backfill one table)")
     args = parser.parse_args()
 
     spark = (SparkSession.builder.appName("silver-cdc")
@@ -225,7 +234,7 @@ def main():
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {SILVER}")
     email_hash = pii_hasher()
 
-    queries = [start_query(spark, table, args, email_hash) for table in TABLES]
+    queries = [start_query(spark, table, args, email_hash) for table in args.tables]
     for q in queries:
         print(f"started {q.name}", flush=True)
     if args.available_now:
