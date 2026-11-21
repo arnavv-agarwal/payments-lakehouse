@@ -151,6 +151,10 @@ open http://localhost:4041                      # Spark UI for silver
 docker compose run --rm spark-tools /opt/spark/bin/spark-submit \
   --py-files /opt/lakehouse/jobs/silver_cdc.py /opt/lakehouse/jobs/reconcile_silver.py
 
+# Process only some tables (added in step 6), e.g. with the service stopped
+docker compose run --rm spark-tools /opt/spark/bin/spark-submit \
+  /opt/lakehouse/jobs/silver_cdc.py --available-now --tables merchants
+
 ./spark/sql.sh -e "SELECT status, count(*) FROM silver.payments GROUP BY status"
 ./spark/sql.sh -e "SELECT * FROM silver.payment_methods WHERE _is_deleted"
 ./spark/sql.sh -e "CALL lakehouse.system.rewrite_position_delete_files('lakehouse.silver.payments')"

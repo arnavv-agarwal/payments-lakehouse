@@ -20,7 +20,8 @@ Run `python -m generator seed --help` for the rest.
 | `generator/seed.py` | Bulk history load with `COPY` |
 | `generator/simulate.py` | Live mode: event scheduler, payment lifecycle, reference-data changes |
 | `generator/stats.py` | Summary queries |
-| `requirements.txt` | Pinned versions: psycopg 3, Faker, python-dotenv |
+| `generator/db.py` | The Postgres connection (added in step 3, shared with `tools/`) |
+| `requirements.txt` | Pinned versions: psycopg 3, Faker, python-dotenv (and, from step 3, confluent-kafka) |
 
 ## What the data looks like (measured after seeding)
 

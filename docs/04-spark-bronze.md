@@ -151,4 +151,7 @@ open http://localhost:9001                   # object store console
 # One-off catch-up instead of the always-on service
 docker compose run --rm --no-deps spark-bronze \
   /opt/spark/bin/spark-submit /opt/lakehouse/jobs/bronze_cdc.py --available-now
+# Only some tables (added in step 6, e.g. to backfill one table)
+docker compose run --rm --no-deps spark-bronze \
+  /opt/spark/bin/spark-submit /opt/lakehouse/jobs/bronze_cdc.py --available-now --tables payments
 ```

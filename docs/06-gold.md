@@ -22,7 +22,7 @@ tables into a Kimball star schema for analytics.
 | `dim_customer` | customer (SCD Type 1, no PII) | rebuilt each run |
 | `dim_payment_method` | payment method (SCD Type 1) | rebuilt each run |
 | `dim_date` | calendar day, 2024 to 2027 | rebuilt each run |
-| `pipeline_state` | one row: the watermarks of the last run | replaced each run |
+| `pipeline_state` | one row: the last run's watermarks and the snapshot id of every input it read (so `--check` can recompute from exactly that data) | replaced each run |
 
 `fact_payments` measures: `amount_paise`, `fee_paise` (at the rate valid at
 payment time), `net_settlement_paise`, `refunded_paise`, `refund_count`,
