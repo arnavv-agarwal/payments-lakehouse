@@ -1,0 +1,10 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets (copy .env.example to .env)
+.env
+
+# macOS
+.DS_Store

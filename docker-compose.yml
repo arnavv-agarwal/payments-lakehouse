@@ -1,0 +1,35 @@
+name: payments-lakehouse
+
+services:
+  postgres:
+    image: postgres:17.12
+    container_name: pl-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # Read by postgres/init/02_cdc_setup.sh to create the Debezium role.
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD:?set DEBEZIUM_PASSWORD in .env}
+    command:
+      - postgres
+      # Write enough detail to the WAL for logical decoding (what Debezium reads).
+      - -c
+      - wal_level=logical
+      # Cap the WAL a replication slot can hold back. Without this, a stopped
+      # Debezium connector makes Postgres keep WAL forever until the disk fills.
+      - -c
+      - max_slot_wal_keep_size=2GB
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Scripts here run once, in filename order, only when pgdata is empty.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:
