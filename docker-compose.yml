@@ -25,6 +25,8 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Scripts here run once, in filename order, only when pgdata is empty.
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      # Versioned schema changes; 03_apply_migrations.sh applies them on a fresh volume.
+      - ./postgres/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -171,6 +173,106 @@ services:
     ports:
       - "8080:8080"
 
+  # S3-compatible object storage for the lakehouse files (local stand-in for
+  # AWS S3). RustFS, because MinIO no longer publishes container images; any
+  # S3-compatible store works, since Iceberg only talks the S3 API.
+  object-store:
+    image: rustfs/rustfs:1.0.5
+    container_name: pl-object-store
+    environment:
+      RUSTFS_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?set LAKEHOUSE_S3_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?set LAKEHOUSE_S3_SECRET_KEY in .env}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - objectdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  # One-off: create the lakehouse bucket if it doesn't exist yet, then exit.
+  object-store-init:
+    image: amazon/aws-cli:2.39.6
+    container_name: pl-object-store-init
+    depends_on:
+      object-store:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${LAKEHOUSE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${LAKEHOUSE_S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        aws --endpoint-url http://object-store:9000 s3api head-bucket --bucket lakehouse 2>/dev/null
+        || aws --endpoint-url http://object-store:9000 s3api create-bucket --bucket lakehouse
+
+  # Iceberg catalog: maps each table name to its current metadata file and
+  # makes commits atomic. Separate from the source database on purpose: the
+  # payments database belongs to the application, not to the lakehouse.
+  iceberg-catalog:
+    image: postgres:17.12
+    container_name: pl-iceberg-catalog
+    environment:
+      POSTGRES_USER: iceberg
+      POSTGRES_PASSWORD: ${ICEBERG_CATALOG_PASSWORD:?set ICEBERG_CATALOG_PASSWORD in .env}
+      POSTGRES_DB: iceberg
+    volumes:
+      - catalogdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Streaming job: Kafka CDC topics -> Iceberg bronze tables (spark/jobs/bronze_cdc.py).
+  spark-bronze:
+    build:
+      context: ./spark
+      args:
+        SPARK_VERSION: 4.1.4
+        ICEBERG_VERSION: 1.12.0
+    image: payments-lakehouse/spark:4.1.4-iceberg-1.12.0
+    container_name: pl-spark-bronze
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      iceberg-catalog:
+        condition: service_healthy
+      object-store-init:
+        condition: service_completed_successfully
+    command: ["/opt/spark/bin/spark-submit", "/opt/lakehouse/jobs/bronze_cdc.py", "--trigger-seconds", "30"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${LAKEHOUSE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${LAKEHOUSE_S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      ICEBERG_CATALOG_PASSWORD: ${ICEBERG_CATALOG_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    volumes:
+      - ./spark/jobs:/opt/lakehouse/jobs:ro
+      # Kafka offsets + Iceberg commit ids per micro-batch. Losing this means
+      # re-reading Kafka from the start (production keeps it on S3).
+      - sparkcheckpoints:/checkpoints
+    ports:
+      - "4040:4040"   # Spark UI while the job runs
+    # A failed query stops the job; Docker restarts it and every query resumes
+    # from its checkpoint. This is also how it picks up a new schema version.
+    restart: unless-stopped
+
 volumes:
   pgdata:
   kafkadata:
+  objectdata:
+  catalogdata:
+  sparkcheckpoints:
