@@ -56,18 +56,27 @@ def current_snapshot_id(spark, table):
     return row and row["snapshot_id"]
 
 
-def pinned(spark, table):
-    """Read a table as of its current snapshot, so every action in this run sees
-    the same data even while the streaming jobs keep committing."""
-    return spark.sql(f"SELECT * FROM {table} VERSION AS OF {current_snapshot_id(spark, table)}")
+def pinned(spark, table, snapshot_id=None):
+    """Read a table as of one snapshot (by default its current one), so every
+    action in this run sees the same data even while streaming jobs commit."""
+    return spark.sql(f"SELECT * FROM {table} VERSION AS OF {snapshot_id or current_snapshot_id(spark, table)}")
 
 
-def inputs(spark):
-    return {
-        "bronze_merchants": pinned(spark, f"{BRONZE}.merchants"),
-        **{t: pinned(spark, f"{SILVER}.{t}")
-           for t in ["customers", "payment_methods", "payments", "refunds"]},
-    }
+INPUT_TABLES = {
+    "bronze_merchants": f"{BRONZE}.merchants",
+    **{t: f"{SILVER}.{t}" for t in ["customers", "payment_methods", "payments", "refunds"]},
+}
+
+
+def inputs(spark, snapshot_ids=None):
+    """Input DataFrames pinned to snapshots, plus the snapshot ids used.
+
+    The ids are saved with each run so --check can recompute from exactly the
+    data that run saw, even after the streaming jobs have moved on.
+    """
+    ids = dict(snapshot_ids) if snapshot_ids else {k: current_snapshot_id(spark, t)
+                                                   for k, t in INPUT_TABLES.items()}
+    return {k: pinned(spark, t, ids[k]) for k, t in INPUT_TABLES.items()}, ids
 
 
 # ----------------------------------------------------------------------------- dimensions
@@ -288,11 +297,15 @@ def main():
              .getOrCreate())
     spark.sparkContext.setLogLevel("ERROR")
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {GOLD}")
-    src = inputs(spark)
     fact_name = f"{GOLD}.fact_payments"
+    state_name = f"{GOLD}.pipeline_state"
 
     if args.check:
+        state = spark.table(state_name).first()
+        src, _ = inputs(spark, state["input_snapshots"])
         sys.exit(check(spark, src, fact_name))
+
+    src, snapshot_ids = inputs(spark)
 
     # Merchant versions as gold had them before this run (to detect new ones).
     old_dim = f"{GOLD}.dim_merchant"
@@ -307,9 +320,10 @@ def main():
     # a lazy TableReference that Iceberg's MERGE can't plan inside a MERGE source.)
     dim_merchant = pinned(spark, old_dim)
 
-    state_name = f"{GOLD}.pipeline_state"
     state = (spark.table(state_name).first() if spark.catalog.tableExists(state_name) else None)
-    full = args.full_refresh or state is None or not spark.catalog.tableExists(fact_name)
+    # (A Row is a tuple: `"x" in row` tests the values, so check the field names.)
+    full = (args.full_refresh or state is None or "input_snapshots" not in state.asDict()
+            or not spark.catalog.tableExists(fact_name))
 
     if full:
         replace_table(build_fact_payments(src["payments"], src["refunds"], dim_merchant),
@@ -344,8 +358,9 @@ def main():
     # Stored as integer microseconds to avoid any timezone conversion on the way.
     marks = {t: src[t].agg(F.max(F.unix_micros("_silver_updated_at"))).first()[0]
              for t in ["payments", "refunds"]}
-    spark.createDataFrame([(marks["payments"], marks["refunds"])],
-                          "payments_watermark_us bigint, refunds_watermark_us bigint") \
+    spark.createDataFrame(
+        [(marks["payments"], marks["refunds"], snapshot_ids)],
+        "payments_watermark_us bigint, refunds_watermark_us bigint, input_snapshots map<string, bigint>") \
         .withColumn("run_at", F.current_timestamp()).writeTo(state_name).createOrReplace()
 
     report(spark, summary)

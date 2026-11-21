@@ -316,9 +316,83 @@ services:
       - ./spark/jobs:/opt/lakehouse/jobs:ro
       - sparkcheckpoints:/checkpoints
 
+  # ---------------------------------------------------------------- orchestration
+
+  # Airflow's own metadata: DAG runs, task states, logs index.
+  airflow-db:
+    image: postgres:17.12
+    container_name: pl-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflowdb:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Airflow starts job containers through this proxy instead of holding the raw
+  # Docker socket. It only allows container and image calls. (Anything that can
+  # start containers is still powerful; this narrows it, it doesn't make it safe.)
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: pl-docker-proxy
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1  # allow create/start/remove, not only reads
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # `airflow standalone` runs the API server/UI, scheduler, DAG processor and
+  # triggerer in one container with the LocalExecutor: right for a laptop.
+  # Production splits these (Phase 2: Amazon MWAA).
+  airflow:
+    image: apache/airflow:3.3.2-python3.12
+    container_name: pl-airflow
+    command: standalone
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set AIRFLOW_FERNET_KEY in .env}
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+      # Local only: everyone who can reach the UI is an admin, no login page.
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+      AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+      # Read by the DAG file to start job containers.
+      DOCKER_HOST: tcp://docker-proxy:2375
+      LAKEHOUSE_NETWORK: payments-lakehouse_default
+      LAKEHOUSE_HOST_DIR: ${PWD:?run docker compose from the project directory}
+      AWS_ACCESS_KEY_ID: ${LAKEHOUSE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${LAKEHOUSE_S3_SECRET_KEY}
+      ICEBERG_CATALOG_PASSWORD: ${ICEBERG_CATALOG_PASSWORD}
+      PII_HASH_KEY: ${PII_HASH_KEY}
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+    ports:
+      - "8088:8080"   # Airflow UI (8080 is Kafka UI)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+      start_interval: 5s
+
 volumes:
   pgdata:
   kafkadata:
   objectdata:
   catalogdata:
   sparkcheckpoints:
+  airflowdb:
