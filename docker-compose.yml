@@ -31,5 +31,146 @@ services:
       timeout: 3s
       retries: 12
 
+  # Single-node Kafka in KRaft mode: the same process is broker and controller
+  # (no ZooKeeper; Kafka 4 removed it).
+  kafka:
+    image: confluentinc/cp-kafka:8.4.0
+    container_name: pl-kafka
+    environment:
+      CLUSTER_ID: cLr0JRxUR0ekDYZ12K0Rbg
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Two client listeners for two audiences: other containers connect to
+      # kafka:29092, programs on the Mac connect to localhost:9092.
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Topics are created on purpose (by Connect), never by a typo in a consumer.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # One broker, so Kafka's own internal topics can only have one replica.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx1g
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+      start_interval: 3s
+
+  # Stores Avro schemas; messages carry only a 4-byte schema id instead of the schema.
+  schema-registry:
+    image: confluentinc/cp-schema-registry:8.4.0
+    container_name: pl-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+      # A new schema version must still be able to read data written with the previous one.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+      SCHEMA_REGISTRY_HEAP_OPTS: -Xms256m -Xmx512m
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/subjects', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 3s
+
+  # Kafka Connect worker running the Debezium Postgres source connector.
+  # The connector itself is registered with connect/register.sh.
+  connect:
+    build:
+      context: ./connect
+      args:
+        CP_VERSION: 8.4.0
+        DEBEZIUM_VERSION: 3.7.1.Final
+    image: payments-lakehouse/connect:8.4.0-debezium-3.7.1
+    container_name: pl-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_GROUP_ID: payments-connect
+      # Connect keeps all of its state in Kafka: connector configs, source
+      # offsets (for Debezium: the last WAL position sent) and task status.
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      # How often source offsets are committed (default 60 s). Debezium only
+      # confirms a WAL position to Postgres after the offset is committed, so
+      # this also controls how quickly the replication slot can release WAL.
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      # Lets connector configs say ${env:DEBEZIUM_PASSWORD} instead of the real
+      # password, so the connector JSON in git holds no secret.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD:?set DEBEZIUM_PASSWORD in .env}
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx1g
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/connectors', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+      start_interval: 3s
+
+  # Web UI for browsing topics, Avro-decoded messages, schemas and connectors.
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    container_name: pl-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: payments
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: payments-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:8083
+      DYNAMIC_CONFIG_ENABLED: "false"
+      JAVA_OPTS: -Xmx384m
+    ports:
+      - "8080:8080"
+
 volumes:
   pgdata:
+  kafkadata:

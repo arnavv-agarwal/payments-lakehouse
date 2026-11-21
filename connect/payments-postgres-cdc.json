@@ -1,0 +1,27 @@
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "tasks.max": "1",
+
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "debezium",
+  "database.password": "${env:DEBEZIUM_PASSWORD}",
+  "database.dbname": "payments",
+
+  "topic.prefix": "payments",
+  "table.include.list": "public.merchants,public.customers,public.payment_methods,public.payments,public.refunds",
+
+  "plugin.name": "pgoutput",
+  "publication.name": "dbz_payments",
+  "publication.autocreate.mode": "disabled",
+  "slot.name": "debezium_payments",
+
+  "snapshot.mode": "initial",
+  "heartbeat.interval.ms": "10000",
+  "tombstones.on.delete": "true",
+
+  "topic.creation.default.partitions": "3",
+  "topic.creation.default.replication.factor": "1",
+  "topic.creation.default.cleanup.policy": "delete",
+  "topic.creation.default.retention.ms": "-1"
+}
