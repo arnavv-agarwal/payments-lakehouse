@@ -55,7 +55,7 @@ flowchart LR
 | **Gold** | Kimball star schema, accumulating-snapshot fact, SCD Type 2 merchants, point-in-time joins, late-arriving dimensions | Fees credited 7x too high without SCD2 (₹11.0 lakh vs ₹1.57 lakh); incremental build equals a full rebuild |
 | **Data quality** | 40 checks (25 on AWS): accuracy, completeness, freshness, keys, SCD2 rules, privacy | Outage drill: silver stopped 9 min, freshness check measured 526-541 s lag and failed the run |
 | **Orchestration** | Airflow 3.3 (DockerOperator locally, GlueJobOperator on AWS) | A run with no new data skips all cloud tasks: $0 |
-| **Cloud** | S3, Glue 6.0, Glue Data Catalog, Athena, IAM least privilege, SSM SecureString, Budgets, all in Terraform | AWS silver and gold **identical** to local (Spark vs Athena fingerprints, to the paisa) |
+| **Cloud** | S3, Glue 6.0, Glue Data Catalog, Athena, least-privilege IAM and Budgets in Terraform; the PII hash key in an SSM SecureString, written by a script so it never enters Terraform state | AWS silver and gold **identical** to local (Spark vs Athena fingerprints, to the paisa) |
 | **Testing and CI** | 23 unit tests (PySpark transformations, job plumbing), pyflakes, ShellCheck, Terraform validate, on GitHub Actions | Three injected bugs (fee rounding, validity boundary, LSN ordering) each caught by its test |
 
 ## Tech stack
