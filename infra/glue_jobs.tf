@@ -31,14 +31,16 @@ locals {
     "--job-language"     = "python"
   }
 
-  # job (= script name) => description, default arguments, helper modules it imports
+  # job => script it runs, description, default arguments, helper modules it imports
   glue_jobs = {
     load_bronze = {
+      script      = "load_bronze"
       description = "Append one landing batch (exported from the local bronze tables) to bronze on AWS."
       arguments   = { "--landing" = "s3://${local.bucket}/landing" }
       modules     = ["lakehouse_env"]
     }
     silver_cdc = {
+      script      = "silver_cdc"
       description = "Apply new bronze change events to silver (current state per key), then stop."
       arguments = {
         "--available-now"   = "true"
@@ -48,11 +50,22 @@ locals {
       modules = ["lakehouse_env"]
     }
     gold_star = {
-      description = "Build the gold star schema (incremental). Run with --check true to compare with a full rebuild."
+      script      = "gold_star"
+      description = "Build the gold star schema (incremental)."
       arguments   = {}
       modules     = ["lakehouse_env"]
     }
+    # Same script in check mode, as its own job: it runs right after gold_star,
+    # and a job allows one run at a time (Glue keeps a finished run's slot busy
+    # for a few seconds, so sharing gold_star's job made the check fail to start).
+    gold_check = {
+      script      = "gold_star"
+      description = "Compare gold's incrementally maintained fact_payments with a full recomputation."
+      arguments   = { "--check" = "true" }
+      modules     = ["lakehouse_env"]
+    }
     dq_checks = {
+      script      = "dq_checks"
       description = "Data-quality checks on silver and gold; fails if any error-level check fails."
       arguments = {
         "--skip-source-checks" = "true" # no Postgres on AWS
@@ -61,6 +74,7 @@ locals {
       modules = ["lakehouse_env", "silver_cdc"]
     }
     maintenance = {
+      script      = "maintenance"
       description = "Iceberg housekeeping for one layer: run with --layer bronze|silver|gold."
       arguments   = {}
       modules     = ["lakehouse_env"]
@@ -68,7 +82,7 @@ locals {
   }
 
   # Every Python file Glue needs: the job scripts and the modules they import.
-  python_files = toset(concat(keys(local.glue_jobs), flatten([for j in local.glue_jobs : j.modules])))
+  python_files = toset(flatten([for j in local.glue_jobs : concat([j.script], j.modules)]))
 }
 
 resource "aws_s3_object" "job_code" {
@@ -97,7 +111,7 @@ resource "aws_glue_job" "job" {
   command {
     name            = "glueetl"
     python_version  = "3"
-    script_location = "${local.code}/${each.key}.py"
+    script_location = "${local.code}/${each.value.script}.py"
   }
 
   default_arguments = merge(local.common_arguments, each.value.arguments, {

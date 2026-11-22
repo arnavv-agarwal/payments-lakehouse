@@ -379,8 +379,17 @@ services:
       ICEBERG_CATALOG_PASSWORD: ${ICEBERG_CATALOG_PASSWORD}
       PII_HASH_KEY: ${PII_HASH_KEY}
       DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
+      # Phase 2: the AWS connection for the lakehouse_aws DAG, as an Airflow
+      # connection URI-in-JSON. The key belongs to the narrowly scoped IAM user
+      # payments-lakehouse-airflow (infra/airflow_access.tf); it's created by
+      # tools/create_airflow_key.sh. Empty until then: the AWS DAG fails, the
+      # local DAGs don't care.
+      AIRFLOW_CONN_AWS_LAKEHOUSE: '{"conn_type": "aws", "login": "${AWS_AIRFLOW_ACCESS_KEY_ID:-}", "password": "${AWS_AIRFLOW_SECRET_ACCESS_KEY:-}", "extra": {"region_name": "${AWS_LAKEHOUSE_REGION:-ap-southeast-2}"}}'
+      AWS_LAKEHOUSE_BUCKET: ${AWS_LAKEHOUSE_BUCKET:-}
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
+      # Phase 2: landing batches to upload to S3 (written by export_bronze.py).
+      - ./landing:/opt/lakehouse/landing:ro
     ports:
       - "8088:8080"   # Airflow UI (8080 is Kafka UI)
     healthcheck:
