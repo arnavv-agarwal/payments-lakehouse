@@ -62,5 +62,5 @@ then checks that no bucket, Glue job, database or IAM identity is left.
 ## Before making the repository public
 
 The whole history was scanned: none of the 11 secret values in `.env`, no
-AWS account id, no access-key-shaped strings, no private keys, and no
-AI-attribution trailers appear in any commit.
+AWS account id, no access-key-shaped strings and no private keys appear in any
+commit.
