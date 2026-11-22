@@ -1,0 +1,5 @@
+# Development and CI only (the jobs themselves run on the Spark image or AWS Glue).
+# Same Spark version as the Docker image (spark/Dockerfile).
+pyspark==4.1.4
+pytest==9.2.0
+pyflakes==4.1.0
