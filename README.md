@@ -119,7 +119,7 @@ this project together used about 1.5 DPU-hours, well under one US dollar.
 5. [Silver](docs/05-silver.md) · 6. [Gold star schema and SCD2](docs/06-gold.md) ·
 7. [Data quality and Airflow](docs/07-quality-and-orchestration.md) · 8. [AWS foundations](docs/08-aws-foundations.md) ·
 9. [Landing batches to AWS](docs/09-landing-and-bronze-on-aws.md) · 10. [Batch layer on Glue](docs/10-batch-layer-on-glue.md) ·
-11. [Airflow drives AWS](docs/11-airflow-drives-aws.md)
+11. [Airflow drives AWS](docs/11-airflow-drives-aws.md) · 12. [Tests, CI and teardown](docs/12-tests-ci-teardown.md)
 
 ## Limits
 
