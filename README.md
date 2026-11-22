@@ -58,13 +58,19 @@ flowchart LR
 | **Cloud** | S3, Glue 6.0, Glue Data Catalog, Athena, IAM least privilege, SSM SecureString, Budgets, all in Terraform | AWS silver and gold **identical** to local (Spark vs Athena fingerprints, to the paisa) |
 | **Testing and CI** | 23 unit tests (PySpark transformations, job plumbing), pyflakes, ShellCheck, Terraform validate, on GitHub Actions | Three injected bugs (fee rounding, validity boundary, LSN ordering) each caught by its test |
 
-## Stack
+## Tech stack
 
-Postgres 17 · Debezium 3.7 · Kafka 8.4 (KRaft) · Confluent Schema Registry ·
-Apache Spark 4.1 (PySpark, Structured Streaming) · Apache Iceberg 1.12 / 1.11 ·
-RustFS (S3 API) · Apache Airflow 3.3 · Docker Compose · AWS S3, Glue 6.0,
-Glue Data Catalog, Athena, IAM, Systems Manager, Budgets · Terraform 1.17 ·
-pytest · GitHub Actions
+| | |
+|---|---|
+| **Languages** | ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white) ![SQL](https://img.shields.io/badge/SQL-336791?style=for-the-badge) ![Bash](https://img.shields.io/badge/Bash-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white) |
+| **Source and CDC** | ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=for-the-badge&logo=postgresql&logoColor=white) ![Debezium 3.7](https://img.shields.io/badge/Debezium-3.7-48A23F?style=for-the-badge) ![Apache Kafka 8.4 KRaft](https://img.shields.io/badge/Apache_Kafka-8.4_KRaft-231F20?style=for-the-badge&logo=apachekafka&logoColor=white) ![Kafka Connect](https://img.shields.io/badge/Kafka_Connect-231F20?style=for-the-badge&logo=apachekafka&logoColor=white) ![Schema Registry Confluent](https://img.shields.io/badge/Schema_Registry-Confluent-1C4E80?style=for-the-badge) ![Apache Avro](https://img.shields.io/badge/Apache_Avro-30638E?style=for-the-badge&logo=apacheavro&logoColor=white) ![Kafka UI kafbat](https://img.shields.io/badge/Kafka_UI-kafbat-555555?style=for-the-badge) |
+| **Processing** | ![Apache Spark 4.1](https://img.shields.io/badge/Apache_Spark-4.1-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white) ![PySpark](https://img.shields.io/badge/PySpark-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white) ![Structured Streaming](https://img.shields.io/badge/Structured_Streaming-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white) ![Spark SQL](https://img.shields.io/badge/Spark_SQL-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white) |
+| **Lakehouse storage** | ![Apache Iceberg 1.12](https://img.shields.io/badge/Apache_Iceberg-1.12-2D6DB5?style=for-the-badge) ![Apache Parquet](https://img.shields.io/badge/Apache_Parquet-50ABF1?style=for-the-badge&logo=apacheparquet&logoColor=white) ![RustFS S3 API](https://img.shields.io/badge/RustFS-S3_API-555555?style=for-the-badge) |
+| **Orchestration** | ![Apache Airflow 3.3](https://img.shields.io/badge/Apache_Airflow-3.3-017CEE?style=for-the-badge&logo=apacheairflow&logoColor=white) |
+| **AWS** | ![AWS S3](https://img.shields.io/badge/AWS-S3-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS Glue 6.0](https://img.shields.io/badge/AWS-Glue_6.0-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS Glue Data Catalog](https://img.shields.io/badge/AWS-Glue_Data_Catalog-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS Athena](https://img.shields.io/badge/AWS-Athena-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS IAM](https://img.shields.io/badge/AWS-IAM-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS Systems Manager](https://img.shields.io/badge/AWS-Systems_Manager-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS CloudWatch Logs](https://img.shields.io/badge/AWS-CloudWatch_Logs-FF9900?style=for-the-badge&labelColor=232F3E) ![AWS Budgets](https://img.shields.io/badge/AWS-Budgets-FF9900?style=for-the-badge&labelColor=232F3E) |
+| **Infrastructure** | ![Terraform 1.17](https://img.shields.io/badge/Terraform-1.17-844FBA?style=for-the-badge&logo=terraform&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white) ![Colima](https://img.shields.io/badge/Colima-555555?style=for-the-badge) |
+| **Testing and CI** | ![pytest 9.2](https://img.shields.io/badge/pytest-9.2-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white) ![ShellCheck](https://img.shields.io/badge/ShellCheck-555555?style=for-the-badge) ![pyflakes](https://img.shields.io/badge/pyflakes-3776AB?style=for-the-badge) |
+| **Python libraries** | ![psycopg 3.3](https://img.shields.io/badge/psycopg-3.3-3776AB?style=for-the-badge) ![confluent-kafka 2.16](https://img.shields.io/badge/confluent--kafka-2.16-3776AB?style=for-the-badge) ![Faker 40](https://img.shields.io/badge/Faker-40-3776AB?style=for-the-badge) ![boto3](https://img.shields.io/badge/boto3-3776AB?style=for-the-badge) |
 
 ## Repository layout
 
