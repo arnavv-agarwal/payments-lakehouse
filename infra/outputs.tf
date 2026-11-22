@@ -21,6 +21,11 @@ output "glue_databases" {
   value = sort(local.glue_db_names)
 }
 
+output "glue_jobs" {
+  description = "Glue job names."
+  value       = sort([for j in aws_glue_job.job : j.name])
+}
+
 output "athena_workgroup" {
   value = aws_athena_workgroup.lakehouse.name
 }

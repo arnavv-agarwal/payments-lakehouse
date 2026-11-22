@@ -315,6 +315,8 @@ services:
     volumes:
       - ./spark/jobs:/opt/lakehouse/jobs:ro
       - sparkcheckpoints:/checkpoints
+      # Phase 2: export_bronze.py writes landing batches here for upload to S3.
+      - ./landing:/landing
 
   # ---------------------------------------------------------------- orchestration
 

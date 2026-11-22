@@ -16,3 +16,6 @@ infra/*.tfstate.*
 infra/.terraform.tfstate.lock.info
 infra/terraform.tfvars
 infra/*.tfplan
+
+# Phase 2 landing batches (exported bronze rows, uploaded to S3)
+landing/
