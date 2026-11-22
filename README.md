@@ -84,7 +84,6 @@ flowchart LR
 | `infra/` | Terraform: S3, Glue catalog and jobs, IAM, Athena, budget, logs |
 | `tools/` | reconciliation, Glue/Athena helpers, key management, teardown |
 | `tests/` | PySpark unit tests |
-| `docs/` | one write-up per build step: design decisions, measurements, gotchas |
 
 ## Run it locally
 
@@ -117,15 +116,6 @@ docker compose exec airflow airflow dags trigger lakehouse_aws
 A full AWS run (ship a batch, then load, silver, gold and checks on Glue, then an
 Athena report) takes about 10 minutes and a few US cents. All the Glue runs in
 this project together used about 1.5 DPU-hours, well under one US dollar.
-
-## Documentation
-
-1. [Postgres source](docs/01-postgres-source.md) · 2. [Data generator](docs/02-data-generator.md) ·
-3. [Kafka and Debezium CDC](docs/03-kafka-debezium.md) · 4. [Spark streaming into bronze](docs/04-spark-bronze.md) ·
-5. [Silver](docs/05-silver.md) · 6. [Gold star schema and SCD2](docs/06-gold.md) ·
-7. [Data quality and Airflow](docs/07-quality-and-orchestration.md) · 8. [AWS foundations](docs/08-aws-foundations.md) ·
-9. [Landing batches to AWS](docs/09-landing-and-bronze-on-aws.md) · 10. [Batch layer on Glue](docs/10-batch-layer-on-glue.md) ·
-11. [Airflow drives AWS](docs/11-airflow-drives-aws.md) · 12. [Tests, CI and teardown](docs/12-tests-ci-teardown.md)
 
 ## Limits
 
