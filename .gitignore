@@ -8,3 +8,11 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Terraform: provider downloads, local state (may contain sensitive values), real variable values
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/.terraform.tfstate.lock.info
+infra/terraform.tfvars
+infra/*.tfplan
