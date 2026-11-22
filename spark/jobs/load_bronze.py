@@ -18,10 +18,10 @@ bronze row can be traced back to the batch that brought it.
 """
 import argparse
 import json
-import os
 
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+
+import lakehouse_env
 
 KEY = ["kafka_partition", "kafka_offset"]
 
@@ -97,16 +97,9 @@ def main():
     parser.add_argument("--catalog", default="lakehouse")
     parser.add_argument("--namespace", default="bronze")
     parser.add_argument("--ops-namespace", default="ops")
-    # Glue adds its own arguments (--JOB_ID, --TempDir, ...); ignore them.
-    args, _ = parser.parse_known_args()
+    args = lakehouse_env.parse_args(parser)
 
-    builder = SparkSession.builder.appName("load-bronze")
-    if "ICEBERG_CATALOG_PASSWORD" in os.environ:
-        # Local test run against the JDBC catalog. On Glue the catalog is the
-        # Glue Data Catalog and access comes from the job's IAM role instead.
-        builder = builder.config("spark.sql.catalog.lakehouse.jdbc.password",
-                                 os.environ["ICEBERG_CATALOG_PASSWORD"])
-    spark = builder.getOrCreate()
+    spark = lakehouse_env.spark_session("load-bronze")
     manifest = read_manifest(spark, args.landing, args.batch_id)
 
     results = {}

@@ -15,7 +15,7 @@ Airflow (standalone, LocalExecutor) ──► docker-proxy ──► short-lived
 
 | File / service | Purpose |
 |---|---|
-| `spark/jobs/dq_checks.py` | 35 checks across silver and gold; results appended to `lakehouse.ops.dq_results` |
+| `spark/jobs/dq_checks.py` | 35 checks across silver and gold (40 since step 10 added bronze-to-silver checks); results appended to `lakehouse.ops.dq_results` |
 | `spark/jobs/maintenance.py` | Compaction, delete-file cleanup, snapshot expiry, orphan-file removal for one layer |
 | `airflow/dags/lakehouse.py` | The two DAGs; every task is a `DockerOperator` running one Spark job |
 | `airflow` service | Airflow 3.3.2 `standalone`, UI on **http://localhost:8088** (no login, local only) |
@@ -66,7 +66,7 @@ although silver was only ~60 s behind. The right measure is **how long the
 oldest unapplied change has been waiting** (0 if none). That number is what the
 outage drill measured accurately.
 
-**Results are data.** Every run appends its 35 results to `ops.dq_results`.
+**Results are data.** Every run appends all its results to `ops.dq_results`.
 You can chart failures over time, see when a check first failed, and alert on
 trends rather than single runs.
 

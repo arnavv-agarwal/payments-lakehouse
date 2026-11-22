@@ -22,13 +22,13 @@ plus those affected by new merchant versions, are recomputed and MERGEd.
     spark-submit gold_star.py --check         # compare fact_payments with a full recomputation
 """
 import argparse
-import os
-import sys
 from datetime import date
 
-from pyspark.sql import SparkSession, Window
+from pyspark.sql import Window
 from pyspark.sql import functions as F
 from pyspark.sql.functions import partitioning
+
+import lakehouse_env
 
 SILVER, BRONZE, GOLD = "lakehouse.silver", "lakehouse.bronze", "lakehouse.gold"
 IST = "Asia/Kolkata"
@@ -286,15 +286,13 @@ def payments_to_recompute(spark, src, state, dim_merchant, old_merchant_sks):
 
 def main():
     parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--full-refresh", action="store_true")
-    mode.add_argument("--check", action="store_true",
-                      help="compare fact_payments with a full recomputation; write nothing")
-    args = parser.parse_args()
+    lakehouse_env.add_flag(parser, "--full-refresh")
+    lakehouse_env.add_flag(parser, "--check", help="compare fact_payments with a full recomputation; write nothing")
+    args = lakehouse_env.parse_args(parser)
+    if args.full_refresh and args.check:
+        parser.error("--full-refresh and --check are mutually exclusive")
 
-    spark = (SparkSession.builder.appName("gold-star")
-             .config("spark.sql.catalog.lakehouse.jdbc.password", os.environ["ICEBERG_CATALOG_PASSWORD"])
-             .getOrCreate())
+    spark = lakehouse_env.spark_session("gold-star")
     spark.sparkContext.setLogLevel("ERROR")
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {GOLD}")
     fact_name = f"{GOLD}.fact_payments"
@@ -303,7 +301,8 @@ def main():
     if args.check:
         state = spark.table(state_name).first()
         src, _ = inputs(spark, state["input_snapshots"])
-        sys.exit(check(spark, src, fact_name))
+        lakehouse_env.finish(failed=check(spark, src, fact_name) != 0)
+        return
 
     src, snapshot_ids = inputs(spark)
 

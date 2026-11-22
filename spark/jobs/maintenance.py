@@ -18,10 +18,9 @@ minute, so a day is plenty.
     spark-submit maintenance.py --layer bronze|silver|gold
 """
 import argparse
-import os
 from datetime import datetime, timedelta, timezone
 
-from pyspark.sql import SparkSession
+import lakehouse_env
 
 LAYERS = {
     "bronze": ["merchants", "customers", "payment_methods", "payments", "refunds"],
@@ -62,7 +61,7 @@ def maintain(spark, layer, table):
     spark.sql(f"""CALL lakehouse.system.expire_snapshots(
                     table => '{name}', older_than => TIMESTAMP '{expire_before}', retain_last => 20)""")
     # prefix_listing: list files through Iceberg's S3FileIO. The default lists
-    # through Hadoop's FileSystem, which has no "s3" scheme in this image.
+    # through Hadoop's FileSystem, which has no "s3" scheme in the local image.
     orphans = spark.sql(f"""CALL lakehouse.system.remove_orphan_files(
                     table => '{name}', older_than => TIMESTAMP '{orphan_before}',
                     prefix_listing => true)""").count()
@@ -74,10 +73,8 @@ def maintain(spark, layer, table):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", required=True, choices=list(LAYERS))
-    args = parser.parse_args()
-    spark = (SparkSession.builder.appName(f"maintenance-{args.layer}")
-             .config("spark.sql.catalog.lakehouse.jdbc.password", os.environ["ICEBERG_CATALOG_PASSWORD"])
-             .getOrCreate())
+    args = lakehouse_env.parse_args(parser)
+    spark = lakehouse_env.spark_session(f"maintenance-{args.layer}")
     spark.sparkContext.setLogLevel("ERROR")
     for table in LAYERS[args.layer]:
         maintain(spark, args.layer, table)

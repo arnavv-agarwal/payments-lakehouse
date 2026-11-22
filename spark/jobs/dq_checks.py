@@ -8,29 +8,31 @@ Each run appends its results to lakehouse.ops.dq_results, so check history
 can be charted and alerted on.
 
 Checks against the source compare only *settled* rows: rows whose last change
-in Postgres is older than SETTLE_MINUTES. Anything newer may still be in
+in Postgres is older than --settle-minutes (default 10). Anything newer may still be in
 flight through Debezium, bronze and silver, so it isn't a violation yet. That
 is what makes these checks usable on a live system, unlike the strict
 reconcile_silver.py, which needs the generator stopped.
 
+On AWS there is no Postgres to compare with, so the source checks are skipped
+(--skip-source-checks true). The bronze-to-silver checks still prove silver
+holds the newest version of every key that bronze has seen.
+
     spark-submit dq_checks.py
+    dq_checks.py --skip-source-checks true --settle-minutes 0   (AWS Glue)
 """
+import argparse
 import os
-import sys
 import uuid
 
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.functions import partitioning
 
-from silver_cdc import TABLES
+import lakehouse_env
+from silver_cdc import BRONZE, TABLES
 
 SILVER, GOLD, OPS = "lakehouse.silver", "lakehouse.gold", "lakehouse.ops"
-SETTLE_MINUTES = 10
 MAX_SILVER_LAG_S = 300        # silver may trail Postgres by at most 5 minutes
 MAX_GOLD_AGE_S = 30 * 60      # gold must have run in the last 30 minutes
-JDBC_URL = f"jdbc:postgresql://{os.getenv('PGHOST', 'postgres')}:5432/{os.getenv('POSTGRES_DB', 'payments')}"
-JDBC_PROPS = {"user": "debezium", "password": os.environ["DEBEZIUM_PASSWORD"], "driver": "org.postgresql.Driver"}
 
 # (name, severity, SQL returning one row: violations [, details])
 SQL_CHECKS = [
@@ -86,12 +88,35 @@ SQL_CHECKS = [
 ]
 
 
-def source_checks(spark, table, pk):
+def bronze_checks(spark, table, pk, settle_minutes):
+    """Every key's newest bronze event must be the version silver holds.
+
+    Silver records the WAL position (_lsn) of the change it applied. For each
+    key, the highest source.lsn in bronze is the newest change. Keys whose
+    newest event arrived within the settle window are skipped (silver may not
+    have processed them yet).
+    """
+    row = spark.sql(f"""
+        WITH newest AS (
+            SELECT coalesce(after.{pk}, before.{pk}) AS k,
+                   max(source.lsn) AS lsn, max(kafka_timestamp) AS last_seen
+            FROM {BRONZE}.{table} GROUP BY 1)
+        SELECT count_if(s.{pk} IS NULL) AS missing, count_if(s._lsn <> n.lsn) AS stale, count(*) AS keys
+        FROM newest n LEFT JOIN {SILVER}.{table} s ON s.{pk} = n.k
+        WHERE n.last_seen < current_timestamp() - INTERVAL {settle_minutes} MINUTES
+    """).first()
+    return [(f"silver_{table}_matches_bronze", "error", row["missing"] + row["stale"],
+             f"{row['keys']} keys checked: {row['missing']} missing, {row['stale']} at an older version")]
+
+
+def source_checks(spark, table, pk, settle_minutes):
     """Settled rows must match the source; silver must not trail it by much."""
-    pg = (spark.read.jdbc(JDBC_URL, f"(SELECT {pk}, updated_at FROM {table}) t", properties=JDBC_PROPS)
+    jdbc_url = f"jdbc:postgresql://{os.getenv('PGHOST', 'postgres')}:5432/{os.getenv('POSTGRES_DB', 'payments')}"
+    jdbc_props = {"user": "debezium", "password": os.environ["DEBEZIUM_PASSWORD"], "driver": "org.postgresql.Driver"}
+    pg = (spark.read.jdbc(jdbc_url, f"(SELECT {pk}, updated_at FROM {table}) t", properties=jdbc_props)
           .withColumnRenamed("updated_at", "pg_updated_at"))
     silver = spark.table(f"{SILVER}.{table}").select(pk, "updated_at", "_is_deleted", "_silver_updated_at")
-    cutoff = F.current_timestamp() - F.expr(f"INTERVAL {SETTLE_MINUTES} MINUTES")
+    cutoff = F.current_timestamp() - F.expr(f"INTERVAL {settle_minutes} MINUTES")
 
     live = silver.where("NOT _is_deleted")
     # Source rows whose current version silver hasn't applied (yet).
@@ -109,7 +134,7 @@ def source_checks(spark, table, pk):
                             - F.unix_micros(F.min("pg_updated_at"))) / 1e6).first()[0] or 0.0)
     return [
         (f"silver_{table}_settled_rows_match_source", "error", stale,
-         f"rows changed > {SETTLE_MINUTES} min ago that are missing or stale in silver"),
+         f"rows changed > {settle_minutes} min ago that are missing or stale in silver"),
         (f"silver_{table}_no_rows_deleted_at_source", "warn", extra, "live in silver, absent in Postgres"),
         (f"silver_{table}_freshness", "error", int(lag_s > MAX_SILVER_LAG_S),
          f"silver trails Postgres by {max(lag_s, 0):.0f} s (limit {MAX_SILVER_LAG_S} s)"),
@@ -117,14 +142,20 @@ def source_checks(spark, table, pk):
 
 
 def main():
-    spark = (SparkSession.builder.appName("dq-checks")
-             .config("spark.sql.catalog.lakehouse.jdbc.password", os.environ["ICEBERG_CATALOG_PASSWORD"])
-             .getOrCreate())
+    parser = argparse.ArgumentParser()
+    lakehouse_env.add_flag(parser, "--skip-source-checks", help="no Postgres to compare with (AWS)")
+    parser.add_argument("--settle-minutes", type=int, default=10,
+                        help="ignore changes newer than this; still in flight on a live system")
+    args = lakehouse_env.parse_args(parser)
+
+    spark = lakehouse_env.spark_session("dq-checks")
     spark.sparkContext.setLogLevel("ERROR")
 
     results = []
     for table, (pk, _) in TABLES.items():
-        results += source_checks(spark, table, pk)
+        results += bronze_checks(spark, table, pk, args.settle_minutes)
+        if not args.skip_source_checks:
+            results += source_checks(spark, table, pk, args.settle_minutes)
     # Privacy: no raw personal data columns may ever appear in silver customers.
     raw_pii = {"full_name", "email", "phone"} & set(spark.table(f"{SILVER}.customers").columns)
     results.append(("silver_customers_no_raw_pii", "error", len(raw_pii),
@@ -150,8 +181,7 @@ def main():
         status = "PASS" if not violations else ("FAIL" if severity == "error" else "WARN")
         print(f"{status:4}  {severity:5}  {name:48} {violations:>7}  {details or ''}")
     print(f"\nrun {run_id}: {len(results)} checks, {len(failed_errors)} errors, {len(failed_warns)} warnings")
-    spark.stop()
-    sys.exit(1 if failed_errors else 0)
+    lakehouse_env.finish(failed=bool(failed_errors))
 
 
 if __name__ == "__main__":

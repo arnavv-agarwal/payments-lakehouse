@@ -20,13 +20,17 @@ replaced by a keyed hash of the email and the last 4 phone digits.
 
     spark-submit silver_cdc.py                  # run continuously
     spark-submit silver_cdc.py --available-now  # process new bronze rows, then stop
+
+On AWS Glue it runs as a batch (--available-now true) with its streaming
+checkpoint in S3 (--checkpoint-root s3://...) and the hash key from Parameter
+Store (--pii-key-param /payments-lakehouse/pii-hash-key).
 """
 import argparse
 import hashlib
 import hmac
 import os
 
-from pyspark.sql import SparkSession, Window
+from pyspark.sql import Window
 from pyspark.sql import functions as F
 from pyspark.sql.functions import partitioning
 from pyspark.sql.types import StringType
@@ -40,7 +44,6 @@ TABLES = {
     "refunds": ("refund_id", "created_at"),
 }
 BRONZE, SILVER = "lakehouse.bronze", "lakehouse.silver"
-CHECKPOINT_ROOT = os.getenv("CHECKPOINT_ROOT", "/checkpoints/silver")
 CUSTOMER_PII = ("full_name", "email", "phone")
 
 TABLE_PROPERTIES = {
@@ -55,7 +58,7 @@ TABLE_PROPERTIES = {
 }
 
 
-def pii_hasher():
+def pii_hasher(key=None):
     """HMAC-SHA256 of a normalised value, keyed by PII_HASH_KEY.
 
     A plain SHA-256 of an email can be reversed by hashing a list of known
@@ -63,7 +66,7 @@ def pii_hasher():
     sha2(concat(key, email)) so the key never appears in the query plan (which
     the Spark UI and logs show).
     """
-    key = os.environ["PII_HASH_KEY"].encode()
+    key = (key or os.environ["PII_HASH_KEY"]).encode()
 
     def keyed_hash(value):
         if value is None:
@@ -210,7 +213,7 @@ def start_query(spark, table, args, email_hash):
               .load(bronze_name))
     writer = (stream.writeStream
               .queryName(f"silver_{table}")
-              .option("checkpointLocation", f"{CHECKPOINT_ROOT}/{table}")
+              .option("checkpointLocation", f"{args.checkpoint_root}/{table}")
               .foreachBatch(process))
     writer = (writer.trigger(availableNow=True) if args.available_now
               else writer.trigger(processingTime=f"{args.trigger_seconds} seconds"))
@@ -218,21 +221,24 @@ def start_query(spark, table, args, email_hash):
 
 
 def main():
+    # Imported here, not at the top: other jobs import this module's helpers,
+    # and Spark may import it on executors, where only the driver's needs matter.
+    import lakehouse_env
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--available-now", action="store_true",
-                        help="process new bronze rows, then stop")
+    lakehouse_env.add_flag(parser, "--available-now", help="process new bronze rows, then stop")
     parser.add_argument("--trigger-seconds", type=int, default=60)
     parser.add_argument("--max-rows-per-batch", type=int, default=1_000_000)
     parser.add_argument("--tables", nargs="+", choices=list(TABLES), default=list(TABLES),
                         help="process only these tables (e.g. to backfill one table)")
-    args = parser.parse_args()
+    parser.add_argument("--checkpoint-root", default=os.getenv("CHECKPOINT_ROOT", "/checkpoints/silver"))
+    parser.add_argument("--pii-key-param", help="Parameter Store name of the hash key (on AWS)")
+    args = lakehouse_env.parse_args(parser)
 
-    spark = (SparkSession.builder.appName("silver-cdc")
-             .config("spark.sql.catalog.lakehouse.jdbc.password", os.environ["ICEBERG_CATALOG_PASSWORD"])
-             .getOrCreate())
+    spark = lakehouse_env.spark_session("silver-cdc")
     spark.sparkContext.setLogLevel("WARN")
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {SILVER}")
-    email_hash = pii_hasher()
+    email_hash = pii_hasher(lakehouse_env.secret("PII_HASH_KEY", args.pii_key_param))
 
     queries = [start_query(spark, table, args, email_hash) for table in args.tables]
     for q in queries:

@@ -5,8 +5,11 @@
 # The Spark settings below mirror spark/conf/spark-defaults.conf, except the
 # catalog: `lakehouse` is the Glue Data Catalog here instead of the JDBC one,
 # so the jobs' table names (lakehouse.bronze.payments, ...) stay the same.
+# What else differs between local and Glue is handled in spark/jobs/lakehouse_env.py.
 locals {
-  warehouse = "s3://${aws_s3_bucket.lakehouse.bucket}/warehouse"
+  bucket    = aws_s3_bucket.lakehouse.bucket
+  warehouse = "s3://${local.bucket}/warehouse"
+  code      = "s3://${local.bucket}/code/jobs"
 
   # Glue takes extra Spark settings as one "--conf" argument whose value
   # chains further "--conf" pairs (documented Glue convention).
@@ -24,22 +27,52 @@ locals {
   common_arguments = {
     "--datalake-formats" = "iceberg"
     "--conf"             = local.spark_conf
-    "--TempDir"          = "s3://${aws_s3_bucket.lakehouse.bucket}/tmp/"
+    "--TempDir"          = "s3://${local.bucket}/tmp/"
     "--job-language"     = "python"
   }
 
+  # job (= script name) => description, default arguments, helper modules it imports
   glue_jobs = {
     load_bronze = {
       description = "Append one landing batch (exported from the local bronze tables) to bronze on AWS."
+      arguments   = { "--landing" = "s3://${local.bucket}/landing" }
+      modules     = ["lakehouse_env"]
+    }
+    silver_cdc = {
+      description = "Apply new bronze change events to silver (current state per key), then stop."
       arguments = {
-        "--landing" = "s3://${aws_s3_bucket.lakehouse.bucket}/landing"
+        "--available-now"   = "true"
+        "--checkpoint-root" = "s3://${local.bucket}/checkpoints/silver"
+        "--pii-key-param"   = local.pii_key_parameter
       }
+      modules = ["lakehouse_env"]
+    }
+    gold_star = {
+      description = "Build the gold star schema (incremental). Run with --check true to compare with a full rebuild."
+      arguments   = {}
+      modules     = ["lakehouse_env"]
+    }
+    dq_checks = {
+      description = "Data-quality checks on silver and gold; fails if any error-level check fails."
+      arguments = {
+        "--skip-source-checks" = "true" # no Postgres on AWS
+        "--settle-minutes"     = "0"    # batch: silver has finished before the checks run
+      }
+      modules = ["lakehouse_env", "silver_cdc"]
+    }
+    maintenance = {
+      description = "Iceberg housekeeping for one layer: run with --layer bronze|silver|gold."
+      arguments   = {}
+      modules     = ["lakehouse_env"]
     }
   }
+
+  # Every Python file Glue needs: the job scripts and the modules they import.
+  python_files = toset(concat(keys(local.glue_jobs), flatten([for j in local.glue_jobs : j.modules])))
 }
 
-resource "aws_s3_object" "job_script" {
-  for_each = local.glue_jobs
+resource "aws_s3_object" "job_code" {
+  for_each = local.python_files
 
   bucket      = aws_s3_bucket.lakehouse.id
   key         = "code/jobs/${each.key}.py"
@@ -56,22 +89,27 @@ resource "aws_glue_job" "job" {
 
   glue_version      = "6.0"
   worker_type       = "G.1X" # 4 vCPU, 16 GB per worker; billed as 1 DPU each
-  number_of_workers = 2      # the minimum; our batches are tens of MB
+  number_of_workers = 2      # the minimum; our data is tens of MB
   execution_class   = "STANDARD"
   timeout           = 15 # minutes: a stuck run can't bill for long
-  max_retries       = 0  # retries are Airflow's decision, not Glue's
+  max_retries       = 0  # retries are the orchestrator's decision, not Glue's
 
   command {
     name            = "glueetl"
     python_version  = "3"
-    script_location = "s3://${aws_s3_bucket.lakehouse.bucket}/${aws_s3_object.job_script[each.key].key}"
+    script_location = "${local.code}/${each.key}.py"
   }
 
-  default_arguments = merge(local.common_arguments, each.value.arguments)
+  default_arguments = merge(local.common_arguments, each.value.arguments, {
+    "--extra-py-files" = join(",", [for m in each.value.modules : "${local.code}/${m}.py"])
+  })
 
   execution_property {
-    max_concurrent_runs = 1 # same rule as Airflow's max_active_runs=1 locally
+    max_concurrent_runs = 1 # one writer at a time, as locally (max_active_runs=1)
   }
+
+  # Upload the code before a job can point at it.
+  depends_on = [aws_s3_object.job_code]
 }
 
 # Glue writes driver output and errors to these log groups. Creating them here
@@ -82,4 +120,10 @@ resource "aws_cloudwatch_log_group" "glue" {
 
   name              = each.key
   retention_in_days = 14
+}
+
+# The script upload was called job_script in step 9; same object, new name.
+moved {
+  from = aws_s3_object.job_script["load_bronze"]
+  to   = aws_s3_object.job_code["load_bronze"]
 }
